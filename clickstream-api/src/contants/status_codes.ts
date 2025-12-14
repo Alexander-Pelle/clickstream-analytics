@@ -1,0 +1,4 @@
+export const SUCCESSFULLY_CREATED = 201;
+export const SUCCESSFULLY_FETCHED = 200;
+export const INVALID_REQUEST = 400;
+export const INTERNAL_SERVER_ERROR = 500;
