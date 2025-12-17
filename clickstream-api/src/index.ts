@@ -93,6 +93,29 @@ app.post("/events", async (req: Request, res: Response)=> {
         json({message: "Event created successfully"});
 })
 
+app.get("/stats/event-types", async (_req: Request, res: Response) => {
+    try {
+      const result = await pool.query(
+        `
+        SELECT event_type, COUNT(*)::bigint AS count
+        FROM click_events
+        GROUP BY event_type
+        ORDER BY count DESC;
+        `
+      );
+  
+      const data = result.rows.map((row) => ({
+        eventType: row.event_type as string,
+        count: Number(row.count),
+      }));
+  
+      return res.status(SUCCESSFULLY_FETCHED).json(data);
+    } catch (err) {
+      console.error("Error fetching event type stats:", err);
+      return res.status(INTERNAL_SERVER_ERROR).json({ error: "Failed to fetch event type stats" });
+    }
+});
+
 app.get("/stats/summary", async (_req: Request, res: Response)=> {
     try {
         const totalEvents = await pool.query(`
@@ -153,6 +176,74 @@ app.get("/events", async (_req: Request, res: Response)=> {
         return res.status(INTERNAL_SERVER_ERROR).json({error: "Failed to fetch events"});
     }
 })
+
+// Time-series: events per day for the last N days (default: 7)
+app.get("/stats/events-over-time", async (req: Request, res: Response) => {
+  // Limit to max 90 days so we don't accidentally chew through the entire table
+  const days = Math.min(Number(req.query.days) || 7, 90);
+
+  try {
+    const result = await pool.query(
+      `
+      SELECT
+        to_char(
+          date_trunc('day', to_timestamp(timestamp_ms / 1000)),
+          'YYYY-MM-DD'
+        ) AS date,
+        COUNT(*)::bigint AS count
+      FROM click_events
+      WHERE to_timestamp(timestamp_ms / 1000) >= NOW() - ($1::int * INTERVAL '1 day')
+      GROUP BY date
+      ORDER BY date;
+      `,
+      [days]
+    );
+
+    const data = result.rows.map((row) => ({
+      date: row.date as string,       // "2025-12-17"
+      count: Number(row.count),       
+    }));
+
+    return res.status(SUCCESSFULLY_FETCHED).json(data);
+  } catch (err) {
+    console.error("Error fetching events-over-time stats:", err);
+    return res.status(INTERNAL_SERVER_ERROR).json({ error: "Failed to fetch time series stats" });
+  }
+});
+
+
+app.get("/stats/top-products", async (_req: Request, res: Response) => {
+    try {
+      const result = await pool.query(
+        `
+        SELECT
+          metadata->>'productId' AS "productId",
+          metadata->>'name'      AS "name",
+          COUNT(*)::bigint       AS "purchases",
+          SUM( (metadata->>'price')::numeric * 
+               COALESCE( (metadata->>'quantity')::int, 1 )
+          )::numeric             AS "revenue"
+        FROM click_events
+        WHERE event_type = 'purchase'
+        GROUP BY "productId", "name"
+        ORDER BY "purchases" DESC
+        LIMIT 10;
+        `
+      );
+  
+      const data = result.rows.map((row) => ({
+        productId: row.productId as string,
+        name: row.name as string,
+        purchases: Number(row.purchases),
+        revenue: Number(row.revenue ?? 0),
+      }));
+  
+      return res.status(SUCCESSFULLY_FETCHED).json(data);
+    } catch (err) {
+      console.error("Error fetching top products:", err);
+      return res.status(INTERNAL_SERVER_ERROR).json({ error: "Failed to fetch top products" });
+    }
+  });
 
 initDb()
   .then(() => {
